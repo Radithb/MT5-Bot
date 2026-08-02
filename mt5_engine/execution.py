@@ -56,7 +56,16 @@ def close_position(position):
 
     result = mt5.order_send(request)
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-        logger.info(f"Otomatis MENUTUP posisi lawan arah (Tiket: {position.ticket}) karena sinyal pembalikan!")
+        # Hitung profit/loss dari posisi yang ditutup
+        pnl = position.profit
+        pnl_type = "PROFIT" if pnl >= 0 else "LOSS"
+        pnl_emoji = "✅" if pnl >= 0 else "❌"
+        pos_type_str = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
+        logger.info(
+            f"{pnl_emoji} MENUTUP posisi {pos_type_str} (Tiket: {position.ticket}) | "
+            f"Entry: {position.price_open} → Close: {price} | "
+            f"{pnl_type}: ${pnl:+.2f}"
+        )
         return True
     else:
         err_msg = result.comment if result else "No response"
@@ -117,6 +126,18 @@ def execute_order(symbol, lot, signal_type, price=None, atr_value=0.0):
     if atr_value > 0:
         sl_dist = atr_value * SL_ATR_MULTIPLIER
         tp_dist = atr_value * TP_ATR_MULTIPLIER
+        
+        # Cek jarak minimum SL/TP yang ditetapkan broker
+        min_stop_dist = symbol_info.trade_stops_level * point
+        if min_stop_dist > 0:
+            # Tambah sedikit buffer (10%) agar aman
+            min_stop_dist *= 1.1
+            if sl_dist < min_stop_dist:
+                logger.info(f"SL jarak terlalu kecil ({sl_dist:.2f}), dinaikkan ke batas minimum broker ({min_stop_dist:.2f})")
+                sl_dist = min_stop_dist
+            if tp_dist < min_stop_dist:
+                logger.info(f"TP jarak terlalu kecil ({tp_dist:.2f}), dinaikkan ke batas minimum broker ({min_stop_dist:.2f})")
+                tp_dist = min_stop_dist
         
         if signal_type == 'BUY':
             sl = round(price - sl_dist, symbol_info.digits)

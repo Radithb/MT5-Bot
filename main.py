@@ -59,11 +59,11 @@ def main():
                     
                     # Reset waktu tunggu setelah order
                     wait_start_time = time.time()
-                    # Beri jeda agak lama setelah eksekusi agar tidak spam order
-                    time.sleep(5)
+                    # Beri jeda singkat setelah eksekusi
+                    time.sleep(2)
             
-            # Jeda setiap siklus pemantauan (misal: 3 detik)
-            time.sleep(3)
+            # Jeda setiap siklus pemantauan (1 detik = sangat responsif)
+            time.sleep(1)
             
     except KeyboardInterrupt:
         print("\n")
