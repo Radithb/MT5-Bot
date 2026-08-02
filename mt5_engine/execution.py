@@ -6,7 +6,10 @@ from config.settings import (
     CLOSE_ON_REVERSAL, 
     MIN_ENTRY_DISTANCE_POINTS,
     SL_ATR_MULTIPLIER,
-    TP_ATR_MULTIPLIER
+    TP_ATR_MULTIPLIER,
+    USE_FLASH_CLOSE,
+    FLASH_PROFIT_USD,
+    FLASH_LOSS_USD
 )
 
 logger = logging.getLogger("MT5_Bot")
@@ -252,4 +255,29 @@ def execute_order(symbol, lot, signal_type, price=None, atr_value=0.0):
         return None
         
     logger.info(f"Order {signal_type} BERHASIL! Tiket: {result.order}")
-    return result
+    return result.order
+
+def check_flash_close(symbol=None):
+    """
+    Fungsi Ultra-Scalping: Menutup posisi secara manual jika profit/loss sudah 
+    menyentuh atau melewati target FLASH_PROFIT_USD atau FLASH_LOSS_USD.
+    """
+    if not USE_FLASH_CLOSE:
+        return
+
+    open_positions = get_open_positions(symbol)
+    for pos in open_positions:
+        if pos.profit >= FLASH_PROFIT_USD:
+            print() # Reset baris live status
+            logger.info(
+                f"[⚡ FLASH PROFIT] Cuan kilat +${pos.profit:.2f} (Target: {FLASH_PROFIT_USD})! "
+                f"Bungkus Tiket {pos.ticket} sekarang juga."
+            )
+            close_position(pos)
+        elif pos.profit <= FLASH_LOSS_USD:
+            print() # Reset baris live status
+            logger.info(
+                f"[⚡ FLASH LOSS] Minus kilat -${abs(pos.profit):.2f} (Batas: {FLASH_LOSS_USD})! "
+                f"Cut loss Tiket {pos.ticket} sekarang juga."
+            )
+            close_position(pos)
