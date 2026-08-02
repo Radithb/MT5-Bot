@@ -1,5 +1,6 @@
 import MetaTrader5 as mt5
 import logging
+import datetime
 from config.settings import (
     MAX_OPEN_POSITIONS, 
     CLOSE_ON_REVERSAL, 
@@ -9,6 +10,72 @@ from config.settings import (
 )
 
 logger = logging.getLogger("MT5_Bot")
+
+# Memory tracking untuk mendeteksi penutupan posisi otomatis oleh MT5 (Hit SL / TP)
+tracked_positions = {}
+
+def check_closed_positions(symbol=None):
+    """
+    Memantau posisi yang ditutup secara otomatis oleh broker MT5 (Hit SL / Hit TP)
+    dan mencetak laporan profit/loss ke live log.
+    """
+    global tracked_positions
+
+    current_positions = get_open_positions(symbol)
+    current_tickets = {p.ticket: p for p in current_positions}
+
+    # 1. Deteksi posisi yang menghilang (berhasil ditutup oleh SL, TP, atau Manual)
+    closed_tickets = [t for t in tracked_positions if t not in current_tickets]
+    
+    if closed_tickets:
+        now = datetime.datetime.now()
+        from_date = now - datetime.timedelta(days=1)
+        
+        # Ambil riwayat deal dari MT5
+        history_deals = mt5.history_deals_get(from_date, now)
+        
+        for ticket in closed_tickets:
+            info = tracked_positions.pop(ticket)
+            
+            # Cari deal penutupan untuk tiket posisi ini (entry == 1: ENTRY_OUT, entry == 3: ENTRY_OUT_BY)
+            pos_deals = [d for d in (history_deals or []) if d.position_id == ticket and d.entry in (1, 3)]
+            
+            if pos_deals:
+                deal = pos_deals[-1]
+                pnl = deal.profit + deal.swap + deal.commission
+                comment = deal.comment.lower()
+                close_price = deal.price
+                
+                print()  # Reset baris live status agar log tidak tertimpa
+                if "sl" in comment:
+                    logger.info(
+                        f"[SL] HIT SL (Stop Loss)! Posisi {info['type']} (Tiket: {ticket}) | "
+                        f"Entry: {info['open_price']} → Exit: {close_price} | LOSS: -${abs(pnl):.2f}"
+                    )
+                elif "tp" in comment:
+                    logger.info(
+                        f"[TP] HIT TP (Take Profit)! Posisi {info['type']} (Tiket: {ticket}) | "
+                        f"Entry: {info['open_price']} → Exit: {close_price} | PROFIT: +${pnl:.2f}"
+                    )
+                else:
+                    label = "PROFIT" if pnl >= 0 else "LOSS"
+                    logger.info(
+                        f"[{label}] POSISI DITUTUP! Posisi {info['type']} (Tiket: {ticket}) | "
+                        f"Entry: {info['open_price']} → Exit: {close_price} | {label}: ${pnl:+.2f} ({deal.comment})"
+                    )
+            else:
+                print()
+                logger.info(f"ℹ️ Posisi {info['type']} (Tiket: {ticket}) telah ditutup di MT5.")
+
+    # 2. Daftarkan posisi aktif saat ini ke memory tracker
+    for t, p in current_tickets.items():
+        if t not in tracked_positions:
+            type_str = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
+            tracked_positions[t] = {
+                'symbol': p.symbol,
+                'type': type_str,
+                'open_price': p.price_open
+            }
 
 def get_open_positions(symbol=None):
     """
@@ -59,10 +126,9 @@ def close_position(position):
         # Hitung profit/loss dari posisi yang ditutup
         pnl = position.profit
         pnl_type = "PROFIT" if pnl >= 0 else "LOSS"
-        pnl_emoji = "✅" if pnl >= 0 else "❌"
         pos_type_str = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
         logger.info(
-            f"{pnl_emoji} MENUTUP posisi {pos_type_str} (Tiket: {position.ticket}) | "
+            f"[MANUAL CLOSE] Menutup posisi {pos_type_str} (Tiket: {position.ticket}) | "
             f"Entry: {position.price_open} → Close: {price} | "
             f"{pnl_type}: ${pnl:+.2f}"
         )
@@ -90,11 +156,17 @@ def execute_order(symbol, lot, signal_type, price=None, atr_value=0.0):
                 close_position(pos)
         # Refresh daftar posisi setelah penutupan
         open_positions = get_open_positions(symbol)
+    else:
+        # Jika tidak otomatis ditutup, pastikan kita TIDAK MEMBUKA posisi baru berlawanan arah (Anti-Hedging)
+        opposite_positions = [p for p in open_positions if p.type == opposite_pos_type]
+        if len(opposite_positions) > 0:
+            logger.debug(f"Lewati {signal_type}: Sedang ada {len(opposite_positions)} posisi berlawanan arah yang aktif. Menunggu hingga Hit TP/SL.")
+            return None
 
     # 2. Cek apakah jumlah posisi aktif dalam arah yang sama sudah mencapai batas maksimal
     same_dir_positions = [p for p in open_positions if p.type == target_pos_type]
     if len(same_dir_positions) >= MAX_OPEN_POSITIONS:
-        logger.info(f"Lewati {signal_type}: Posisi {signal_type} aktif untuk {symbol} sudah mencapai batas ({len(same_dir_positions)}/{MAX_OPEN_POSITIONS}).")
+        logger.debug(f"Lewati {signal_type}: Posisi {signal_type} aktif untuk {symbol} sudah mencapai batas ({len(same_dir_positions)}/{MAX_OPEN_POSITIONS}).")
         return None
 
     # Dapatkan info symbol untuk kalkulasi point & desimal
@@ -117,7 +189,7 @@ def execute_order(symbol, lot, signal_type, price=None, atr_value=0.0):
     for pos in same_dir_positions:
         price_diff_points = abs(price - pos.price_open) / point
         if price_diff_points < MIN_ENTRY_DISTANCE_POINTS:
-            logger.info(f"Lewati {signal_type}: Jarak ke posisi aktif terakhir terlalu dekat ({int(price_diff_points)} points < min {MIN_ENTRY_DISTANCE_POINTS} points).")
+            logger.debug(f"Lewati {signal_type}: Jarak ke posisi aktif terakhir terlalu dekat ({int(price_diff_points)} points < min {MIN_ENTRY_DISTANCE_POINTS} points).")
             return None
 
     # 4. Hitung SL (Stop Loss) dan TP (Take Profit) secara Dinamis menggunakan ATR
@@ -129,14 +201,20 @@ def execute_order(symbol, lot, signal_type, price=None, atr_value=0.0):
         
         # Cek jarak minimum SL/TP yang ditetapkan broker
         min_stop_dist = symbol_info.trade_stops_level * point
+        
+        # Jika broker tidak memberikan batas (0 = dinamis), gunakan spread * 3 sebagai fallback
+        if min_stop_dist <= 0:
+            tick = mt5.symbol_info_tick(symbol)
+            if tick:
+                spread = tick.ask - tick.bid
+                min_stop_dist = spread * 3  # 3x spread sebagai jarak aman
+
         if min_stop_dist > 0:
-            # Tambah sedikit buffer (10%) agar aman
-            min_stop_dist *= 1.1
+            # Tambah buffer 20% agar aman
+            min_stop_dist *= 1.2
             if sl_dist < min_stop_dist:
-                logger.info(f"SL jarak terlalu kecil ({sl_dist:.2f}), dinaikkan ke batas minimum broker ({min_stop_dist:.2f})")
                 sl_dist = min_stop_dist
             if tp_dist < min_stop_dist:
-                logger.info(f"TP jarak terlalu kecil ({tp_dist:.2f}), dinaikkan ke batas minimum broker ({min_stop_dist:.2f})")
                 tp_dist = min_stop_dist
         
         if signal_type == 'BUY':

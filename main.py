@@ -3,7 +3,7 @@ import logging
 import os
 from mt5_engine.connection import start_mt5, stop_mt5
 from mt5_engine.market_data import get_current_price, get_historical_rates
-from mt5_engine.execution import execute_order
+from mt5_engine.execution import execute_order, check_closed_positions
 from ai_strategy.signal_generator import generate_signal
 from config.settings import SYMBOL, LOT_SIZE, TIMEFRAME, EMA_FAST, EMA_SLOW
 
@@ -35,6 +35,9 @@ def main():
     
     try:
         while True:
+            # 0. Cek apakah ada posisi yang ditutup oleh MT5 (Hit SL / TP)
+            check_closed_positions(SYMBOL)
+
             # 1. Ambil harga real-time (Bid/Ask)
             price = get_current_price(SYMBOL)
             
