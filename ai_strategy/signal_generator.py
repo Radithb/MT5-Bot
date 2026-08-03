@@ -67,10 +67,43 @@ def generate_signal(symbol, current_price, price_data_df):
         # Hanya gunakan MACD
         if macd_buy_signal: signal = 'BUY'
         elif macd_sell_signal: signal = 'SELL'
-    else:
+    elif settings.ALGO_MODE == 3:
         # Gunakan Keduanya (Jika salah satu menyala, tembak!)
         if rsi_buy_signal or macd_buy_signal: signal = 'BUY'
         elif rsi_sell_signal or macd_sell_signal: signal = 'SELL'
+    elif settings.ALGO_MODE == 4:
+        # BRUTAL SCALPER (SMART PULLBACK + TREND FILTER)
+        # Rahasia Win Rate Tinggi: JANGAN PERNAH MELAWAN ARUS BESAR!
+        # Hanya menembak koreksi (pullback) yang searah dengan tren utama (EMA 200).
+        
+        # Beli: Harga di atas EMA 200 (Tren Naik), tapi sempat koreksi turun (RSI < 45), lalu mantul naik (RSI naik, Candle hijau)
+        if close_now > ema_200_now and rsi_prev < 45 and close_now > prev_row['close'] and rsi_now > rsi_prev:
+            signal = 'BUY'
+            
+        # Jual: Harga di bawah EMA 200 (Tren Turun), tapi sempat koreksi naik (RSI > 55), lalu mantul turun (RSI turun, Candle merah)
+        elif close_now < ema_200_now and rsi_prev > 55 and close_now < prev_row['close'] and rsi_now < rsi_prev:
+            signal = 'SELL'
+            
+    elif settings.ALGO_MODE == 5:
+        # CRAZY LAYER SCALPER (MOMENTUM ACCELERATOR + S/R FILTER)
+        # Menembak BERKALI-KALI dan menambah layer selama momentum masih membesar!
+        # TAPI DIBATASI: Hanya menembak jika harga berada di sekitar Support/Resistance terdekat.
+        
+        macd_hist_prev = prev_row['MACD_HISTOGRAM']
+        supp = df.iloc[-1]['SUPPORT']
+        resis = df.iloc[-1]['RESISTANCE']
+        
+        # Toleransi kedekatan dengan S/R (2.0x ATR) agar masuknya benar-benar di area SnR yang solid
+        near_support = (close_now - supp) <= (atr_val * 2.0)
+        near_resistance = (resis - close_now) <= (atr_val * 2.0)
+        
+        # Beli: HANYA di area Support + Momentum arus mulai berbalik NAIK (MACD Hist menaik)
+        if near_support and macd_hist_now > macd_hist_prev:
+            signal = 'BUY'
+            
+        # Jual: HANYA di area Resistance (Pucuk) + Momentum arus mulai berbalik TURUN (MACD Hist menurun)
+        elif near_resistance and macd_hist_now < macd_hist_prev:
+            signal = 'SELL'
 
     return signal, atr_val, rsi_now, macd_hist_now
 

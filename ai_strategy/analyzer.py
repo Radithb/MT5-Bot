@@ -36,4 +36,8 @@ def compute_indicators(df):
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     data['ATR'] = tr.rolling(window=ATR_PERIOD).mean()
 
+    # Hitung Support & Resistance Terdekat (Swing Low/High 20 Candle Terakhir)
+    data['RESISTANCE'] = data['high'].rolling(window=20).max().shift(1)
+    data['SUPPORT'] = data['low'].rolling(window=20).min().shift(1)
+
     return data
